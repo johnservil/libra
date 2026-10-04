@@ -577,7 +577,7 @@ pub async fn execute_safe(mut args: AddArgs, output: &OutputConfig) -> CliResult
     // ADR-OI-04: accumulate marker publication for the whole staging pass.
     // `run_add` flushes right before each index write so durable markers
     // never lag behind index content; the end flush publishes any remainder.
-    util::objects_storage().begin_object_index_batch();
+    util::objects_storage().begin_object_index_batch_replayed();
     let result = match run_add(&args).await {
         Ok(result) => {
             let batch_storage = util::objects_storage();
@@ -588,6 +588,13 @@ pub async fn execute_safe(mut args: AddArgs, output: &OutputConfig) -> CliResult
                     source,
                 }
             })?;
+            // libra-bench: one batched replay of this command's durable
+            // markers, in place of one queued update (connection, transaction,
+            // syncs) per object. A failure leaves the markers for the next
+            // command's preflight replay, as a failed queued update does.
+            if let Err(error) = batch_storage.replay_object_index_markers().await {
+                tracing::warn!("object-index markers left for a later replay: {error}");
+            }
             result
         }
         Err(error) => {

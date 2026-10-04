@@ -966,6 +966,10 @@ static INDEX_UPDATE_CHANNELS: Lazy<IndexUpdateChannels> = Lazy::new(|| {
 struct ObjectIndexBatchState {
     depth: u32,
     pending: Vec<IndexUpdateMsg>,
+    /// libra-bench: publish the markers but queue nothing; the command
+    /// replays its markers in batches when it ends
+    /// (`replay_object_index_markers`), as preflight replay does.
+    replay: bool,
 }
 
 static OBJECT_INDEX_BATCH_STATE: std::sync::Mutex<BTreeMap<PathBuf, ObjectIndexBatchState>> =
@@ -983,6 +987,7 @@ fn with_object_index_batch_state<R>(
         .or_insert_with(|| ObjectIndexBatchState {
             depth: 0,
             pending: Vec::new(),
+            replay: false,
         }))
 }
 
@@ -1005,12 +1010,16 @@ fn object_index_marker_registration_error(cause: io::Error) -> io::Error {
 /// on disk, the pending list is cleared, and the error propagates (M-BATCH
 /// B2); a later retry re-registers the payloads via `ensure_existing_object_index`.
 fn flush_pending_object_index_batch(key: &Path) -> io::Result<()> {
-    let msgs = with_object_index_batch_state(key, |state| std::mem::take(&mut state.pending));
+    let (msgs, replay) = with_object_index_batch_state(key, |state| (std::mem::take(&mut state.pending), state.replay));
     if msgs.is_empty() {
         return Ok(());
     }
     let marker_paths =
         persist_index_repair_marker_batch(&msgs).map_err(object_index_marker_registration_error)?;
+    if replay {
+        // The markers are durable; the command replays them in batches at its end.
+        return Ok(());
+    }
     for (mut msg, marker_path) in msgs.into_iter().zip(marker_paths) {
         msg.marker_path = Some(marker_path);
         enqueue_index_update(msg, "object index update");
@@ -1931,6 +1940,38 @@ impl ClientStorage {
     /// markers instead of publishing per object; `end_object_index_batch`
     /// publishes up to 256 markers per generation lock and then enqueues the
     /// messages. Nested calls are depth-counted.
+    /// [`Self::begin_object_index_batch`], with the batch's markers left for
+    /// [`Self::replay_object_index_markers`] instead of queued one by one.
+    pub(crate) fn begin_object_index_batch_replayed(&self) {
+        if let Some(key) = Self::index_db_path_from_base(&self.base_path) {
+            with_object_index_batch_state(&key, |state| {
+                state.depth = state.depth.saturating_add(1);
+                state.replay = true;
+            });
+        }
+    }
+
+    /// Replay every pending object-index marker of this repository, a page at
+    /// a time, through the batched path preflight uses.
+    pub(crate) async fn replay_object_index_markers(&self) -> Result<(), String> {
+        let Some(db_path) = Self::index_db_path_from_base(&self.base_path) else {
+            return Ok(());
+        };
+        if let Some(key) = Some(&db_path) {
+            with_object_index_batch_state(key, |state| {
+                if state.depth == 0 {
+                    state.replay = false;
+                }
+            });
+        }
+        loop {
+            let outcome = Self::repair_pending_object_index_updates(&db_path).await?;
+            if !outcome.remaining {
+                return Ok(());
+            }
+        }
+    }
+
     pub(crate) fn begin_object_index_batch(&self) {
         if let Some(key) = Self::index_db_path_from_base(&self.base_path) {
             with_object_index_batch_state(&key, |state| {
