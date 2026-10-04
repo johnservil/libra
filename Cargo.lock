@@ -824,6 +824,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "blake3-servil"
+version = "0.3.0+2e4fa821f9db07b945dbb2b0d02eb76cb19617b5"
+source = "git+https://github.com/johnservil/BLAKE3?rev=7dc9afe48eade635f1c3261b0deb29e1276b0625#7dc9afe48eade635f1c3261b0deb29e1276b0625"
+dependencies = [
+ "arrayvec",
+ "cc",
+ "cfg-if",
+ "constant_time_eq 0.4.2",
+ "cpufeatures 0.3.0",
+ "libc",
+]
+
+[[package]]
 name = "block-buffer"
 version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2795,13 +2808,12 @@ dependencies = [
 [[package]]
 name = "git-internal"
 version = "0.10.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d119c7387b2fa0b751436dc2b8dd1da6d3356c4a7eb9e821dc78a37a0f3eb8ab"
+source = "git+https://github.com/johnservil/git-internal?branch=in-place-ids#d394cc6f62ddc6264523873a6c75e27dcb6a9e38"
 dependencies = [
  "ahash 0.8.12",
  "async-trait",
  "axum",
- "blake3",
+ "blake3-servil",
  "bstr",
  "byteorder",
  "bytes",

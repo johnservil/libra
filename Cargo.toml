@@ -695,3 +695,8 @@ path = "tests/change_genealogy_rebase.rs"
 [[test]]
 name = "change_genealogy_squash_split"
 path = "tests/change_genealogy_squash_split.rs"
+
+# git-internal with BLAKE3 object IDs hashed in place and built on the servil
+# fork of BLAKE3 (libra-tools/git-internal#183).
+[patch.crates-io]
+git-internal = { git = "https://github.com/johnservil/git-internal", branch = "in-place-ids" }
