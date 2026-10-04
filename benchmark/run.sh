@@ -7,7 +7,7 @@ set -euo pipefail
 
 REPOSITORY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly REPOSITORY_ROOT
-readonly DEFAULT_SCENARIOS=(status_clean status_dirty log_history rev_list_refs fsck_history)
+readonly DEFAULT_SCENARIOS=(status_clean status_dirty log_history rev_list_refs fsck_history add_all)
 
 revision="HEAD"
 binary_override=""
@@ -19,6 +19,7 @@ file_count=5000
 history_count=1000
 ref_count=10000
 keep_workspace=false
+object_format=""
 declare -a selected_scenarios=()
 
 usage() {
@@ -34,10 +35,12 @@ Options:
   --control-binary <p>   Compatible Libra used to resolve/export --revision.
   --scenario <name>      Run one scenario (repeatable). Defaults to all.
                          status_clean, status_dirty, log_history,
-                         rev_list_refs, fsck_history
+                         rev_list_refs, fsck_history, add_all
   --runs <n>             Recorded runs per scenario (default: 10).
   --warmup <n>           Unrecorded runs per scenario (default: 3).
-  --file-count <n>       Files in each status fixture (default: 5000).
+  --file-count <n>       Files in each status and add fixture (default: 5000).
+  --object-format <f>    Object format of every fixture: sha1, sha256, or
+                         blake3 (default: libra init's).
   --history-count <n>    Commits in history fixtures (default: 1000).
   --ref-count <n>        Refs in the rev-list fixture (default: 10000).
   --output <path>        Result JSON path (default: benchmark/results/...).
@@ -122,7 +125,7 @@ run_setup_in_repository() {
 
 create_base_repository() {
     local repository="$1"
-    "$benchmark_binary" init --quiet --vault false "$repository"
+    "$benchmark_binary" init --quiet --vault false ${object_format:+--object-format "$object_format"} "$repository"
     run_setup_in_repository "$repository" config set user.name "Libra Benchmark"
     run_setup_in_repository "$repository" config set user.email "benchmark@libra.local"
 }
@@ -148,6 +151,22 @@ create_status_fixture() {
             printf 'dirty fixture change %s\n' "$index" >> "$repository/$file"
         done
     fi
+}
+
+# A fresh repository with --file-count untracked files of a source tree's
+# sizes: lengths cycle through 512 B to 64 KiB (mean about 10 KB, as git's
+# own tree), so `libra add .` hashes and stores each one.
+create_add_fixture() {
+    local repository="$1"
+    local index file size
+    local -a sizes=(512 1500 3000 6000 12000 24000 3000 1500 6000 48000 700 9000 65536 2000 4000 16000)
+    create_base_repository "$repository"
+    mkdir -p "$repository/files"
+    for ((index = 1; index <= file_count; index += 1)); do
+        printf -v file 'files/file-%05d.txt' "$index"
+        size=${sizes[$((index % ${#sizes[@]}))]}
+        yes "add fixture line of file $index" | head -c "$size" > "$repository/$file"
+    done
 }
 
 create_history_fixture() {
@@ -187,6 +206,7 @@ fixture_for() {
         status_dirty) create_status_fixture "$fixture" dirty ;;
         log_history | fsck_history) create_history_fixture "$fixture" ;;
         rev_list_refs) create_refs_fixture "$fixture" ;;
+        add_all) create_add_fixture "$fixture" ;;
         *) die "unknown scenario: $scenario" ;;
     esac
     printf '%s\n' "$fixture"
@@ -198,6 +218,7 @@ scenario_command() {
         log_history) printf '%s\n' 'log --oneline' ;;
         rev_list_refs) printf '%s\n' 'rev-list --all --count' ;;
         fsck_history) printf '%s\n' 'fsck' ;;
+        add_all) printf '%s\n' 'add .' ;;
         *) die "unknown scenario: $1" ;;
     esac
 }
@@ -242,7 +263,14 @@ run_scenario() {
     for ((sample = 1; sample <= warmup + runs; sample += 1)); do
         stdout_file="$workspace/$scenario-$sample.stdout"
         stderr_file="$workspace/$scenario-$sample.stderr"
-        IFS=, read -r elapsed rss exit_code < <(measure_once "$repository" "$stdout_file" "$stderr_file" "${command_parts[@]}")
+        run_repository="$repository"
+        if [[ "$scenario" == add_all ]]; then
+            # `add` changes the repository: each sample starts from a fresh copy, made untimed.
+            run_repository="$workspace/add-run"
+            rm -rf "$run_repository"
+            cp -a "$repository" "$run_repository"
+        fi
+        IFS=, read -r elapsed rss exit_code < <(measure_once "$run_repository" "$stdout_file" "$stderr_file" "${command_parts[@]}")
         if [[ "$exit_code" != "0" ]]; then
             cat "$stderr_file" >&2
             die "$scenario failed on sample $sample with exit code $exit_code"
@@ -327,6 +355,11 @@ while (($#)); do
             require_value "$1" "${2:-}"
             require_positive_integer "$1" "$2"
             ref_count="$2"
+            shift 2
+            ;;
+        --object-format)
+            require_value "$1" "${2:-}"
+            object_format="$2"
             shift 2
             ;;
         --keep-workspace)
@@ -432,6 +465,7 @@ result_tmp="$output.tmp.$$"
     printf '  "runs":%s,\n' "$runs"
     printf '  "warmup_runs":%s,\n' "$warmup"
     printf '  "fixture_scale":{"files":%s,"history_commits":%s,"refs":%s},\n' "$file_count" "$history_count" "$ref_count"
+    printf '  "object_format":"%s",\n' "${object_format:-default}"
     platform="$(uname -srm)"
     printf '  "platform":"%s",\n' "$(printf '%s' "$platform" | json_escape)"
     printf '  "scenarios":[\n'
