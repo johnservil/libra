@@ -63,8 +63,8 @@ pub(crate) fn verify_fetched_object(
             ObjectHash::Sha256(Sha256::digest(&framed).into())
         }
         HashKind::Blake3 => {
-            let mut hasher = git_internal::utils::HashAlgorithm::new_for_kind(HashKind::Blake3);
-            hasher.update(&framed);
+            let mut hasher = git_internal::utils::HashAlgorithm::for_object(HashKind::Blake3, &type_bytes, data.len());
+            hasher.update(data);
             hasher.finalize_object_hash()
         }
     };

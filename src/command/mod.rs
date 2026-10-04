@@ -489,11 +489,7 @@ pub(crate) fn stream_file_blob_hash_bounded(
     // byte past it. Reading cap+1 would overrun the very bound this function
     // exists to enforce, exactly when the caller is at its limit.
     let mut reader = io::BufReader::new(file).take(len);
-    let mut hasher = HashAlgorithm::new_for_kind(git_internal::hash::get_hash_kind());
-
-    hasher.update(b"blob ");
-    hasher.update(len.to_string().as_bytes());
-    hasher.update(b"\0");
+    let mut hasher = HashAlgorithm::for_object(git_internal::hash::get_hash_kind(), b"blob", len as usize);
 
     let mut buffer = [0_u8; 64 * 1024];
     let mut total: u64 = 0;
@@ -523,11 +519,7 @@ fn stream_file_blob_hash(path: impl AsRef<Path>) -> io::Result<ObjectHash> {
     let file = File::open(path)?;
     let len = file.metadata()?.len();
     let mut reader = io::BufReader::new(file);
-    let mut hasher = HashAlgorithm::new_for_kind(git_internal::hash::get_hash_kind());
-
-    hasher.update(b"blob ");
-    hasher.update(len.to_string().as_bytes());
-    hasher.update(b"\0");
+    let mut hasher = HashAlgorithm::for_object(git_internal::hash::get_hash_kind(), b"blob", len as usize);
 
     let mut buffer = [0_u8; 64 * 1024];
     loop {

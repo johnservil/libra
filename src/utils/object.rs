@@ -563,7 +563,16 @@ fn decode_and_validate_object_buffer(
     expected_hash: &ObjectHash,
     buffer: Vec<u8>,
 ) -> Result<(String, Vec<u8>), GitError> {
-    let actual_hash = ObjectHash::new_for_kind(git_internal::hash::get_hash_kind(), &buffer);
+    let actual_hash = match buffer.iter().position(|&b| b == 0) {
+        Some(nul) => {
+            let header = &buffer[..nul];
+            let object_type = header.split(|&b| b == b' ').next().unwrap_or(header);
+            let mut hasher = HashAlgorithm::for_object(git_internal::hash::get_hash_kind(), object_type, buffer.len() - nul - 1);
+            hasher.update(&buffer[nul + 1..]);
+            hasher.finalize_object_hash()
+        }
+        None => ObjectHash::new_for_kind(git_internal::hash::get_hash_kind(), &buffer),
+    };
     if &actual_hash != expected_hash {
         return Err(GitError::InvalidObjectInfo(format!(
             "loose object content hashes to {actual_hash}, expected {expected_hash}"
@@ -804,9 +813,7 @@ pub(crate) fn validate_git_object_streaming_file(
         )));
     }
 
-    let mut hasher = HashAlgorithm::new_for_kind(hash.kind());
-    hasher.update(&header);
-    hasher.update(&[0]);
+    let mut hasher = HashAlgorithm::for_object(hash.kind(), object_type.as_bytes(), declared_size as usize);
     let mut remaining = declared_size;
     let mut buffer = [0_u8; STREAM_BUFFER_BYTES];
     while remaining > 0 {
@@ -979,10 +986,9 @@ pub fn write_git_object(
 /// Writers that need crash-durable ownership can persist this id before the
 /// corresponding object becomes visible in the shared object database.
 pub(crate) fn git_object_hash(object_type: &str, data: &[u8]) -> ObjectHash {
-    let header = format!("{} {}\0", object_type, data.len());
-    let mut content = header.into_bytes();
-    content.extend_from_slice(data);
-    ObjectHash::new_for_kind(git_internal::hash::get_hash_kind(), &content)
+    let mut hasher = HashAlgorithm::for_object(git_internal::hash::get_hash_kind(), object_type.as_bytes(), data.len());
+    hasher.update(data);
+    hasher.finalize_object_hash()
 }
 
 /// Write one loose object and report whether this call created its payload.

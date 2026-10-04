@@ -2321,11 +2321,9 @@ async fn verify_object(
     // Verify hash integrity: type + ' ' + size + '\0' + content under the
     // repository kind (sha1 / sha256 / blake3) via `object_format::digest`.
     let kind = git_internal::hash::get_hash_kind();
-    let header = format!("{} {}\0", obj_type.to_string().to_lowercase(), size);
-    let mut payload = Vec::with_capacity(header.len() + data.len());
-    payload.extend_from_slice(header.as_bytes());
-    payload.extend_from_slice(&data);
-    let computed = crate::internal::object_format::digest(kind, &payload);
+    let mut hasher = git_internal::utils::HashAlgorithm::for_object(kind, obj_type.to_string().to_lowercase().as_bytes(), size);
+    hasher.update(&data);
+    let computed = hasher.finalize_object_hash();
     let computed_bytes = computed.as_ref();
 
     // Compare with stored hash
